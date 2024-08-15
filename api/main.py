@@ -31,10 +31,10 @@ def upload_to_gemini(path, mime_type=None):
     try:
         file = genai.upload_file(path, mime_type=mime_type)
         print(f"Uploaded file '{file.display_name}' as: {file.uri}")
-        return file
+        return file.uri  # Retourner l'URI du fichier
     except Exception as e:
-        print(f"Error uploading file: {e}")
-        return None
+        print(f"Failed to upload file: {e}")
+        raise
 
 @app.route('/api/gemini_vision', methods=['GET'])
 def gemini_vision_get():
@@ -53,18 +53,20 @@ def gemini_vision_get():
 
     try:
         if image_url and text:
+            # Télécharger l'image depuis l'URL
             image_path = download_image(image_url)
-            if image_path:
-                uploaded_file = upload_to_gemini(image_path, mime_type="image/jpeg")
-                if uploaded_file:
-                    user_history.append({
-                        "role": "user",
-                        "parts": [uploaded_file.uri, text],
-                    })
-                else:
-                    return jsonify({'error': 'Failed to upload image'}), 500
-            else:
-                return jsonify({'error': 'Failed to download image'}), 500
+            uploaded_file_uri = upload_to_gemini(image_path)
+
+            # Ajouter l'image et le texte à l'historique
+            user_history.append({
+                "role": "user",
+                "parts": [uploaded_file_uri, text],
+            })
+
+            chat_session = model.start_chat(history=user_history)
+            response = chat_session.send_message(text)
+            user_history.append({"role": "model", "parts": [response.text]})
+            return jsonify({'response': response.text})
 
         elif text:
             user_history.append({
@@ -72,27 +74,28 @@ def gemini_vision_get():
                 "parts": [text],
             })
 
-        chat_session = model.start_chat(history=user_history)
-        response = chat_session.send_message(text)
-        user_history.append({"role": "model", "parts": [response.text]})
-        return jsonify({'response': response.text})
+            chat_session = model.start_chat(history=user_history)
+            response = chat_session.send_message(text)
+            user_history.append({"role": "model", "parts": [response.text]})
+            return jsonify({'response': response.text})
+
+        else:
+            return jsonify({'error': 'Text or image_url parameter not provided'}), 400
 
     except Exception as e:
-        print(f"Error processing request: {e}")
-        return jsonify({'error': 'An error occurred while processing your request'}), 500
+        return jsonify({'error': str(e)}), 500
 
 def download_image(image_url):
     """Télécharge une image depuis une URL et retourne le chemin local."""
-    try:
-        response = requests.get(image_url, stream=True)
-        response.raise_for_status()
+    response = requests.get(image_url, stream=True)
+    if response.status_code == 200:
         image_path = os.path.join("/tmp", os.path.basename(urlparse(image_url).path))
         with open(image_path, 'wb') as out_file:
             out_file.write(response.content)
         return image_path
-    except requests.RequestException as e:
-        print(f"Error downloading image: {e}")
-        return None
+    else:
+        raise Exception(f"Failed to download image, status code: {response.status_code}")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+            
